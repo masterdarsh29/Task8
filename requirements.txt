@@ -4,6 +4,7 @@ beautifulsoup4
 psycopg2-binary
 pg8000 
 sqlalchemy
+sqlalchemy.exc
 argparse
 numpy
 columns
