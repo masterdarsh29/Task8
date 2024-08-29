@@ -1,116 +1,135 @@
-import pandas as pd
+
 import requests
-from bs4 import BeautifulSoup as bs
-import time
-from sqlalchemy import create_engine, Integer, String, Column, Table, MetaData
-from sqlalchemy.sql import text
-import logging
-import os
+import pandas as pd
+from bs4 import BeautifulSoup
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+import argparse
+import numpy as np
+import random
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def login_to_screener(email, password):
+    session = requests.Session()
+    login_url = "https://www.screener.in/login/?"
+    login_page = session.get(login_url)
+    soup = BeautifulSoup(login_page.content, 'html.parser')
+    csrf_token = soup.find('input', {'name': 'csrfmiddlewaretoken'})['value']
+    login_payload = {
+        'username': email,
+        'password': password,
+        'csrfmiddlewaretoken': csrf_token
+    }
+    headers = {
+        'Referer': login_url,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36'
+    }
+    response = session.post(login_url, data=login_payload, headers=headers)
+    if response.url == "https://www.screener.in/dash/":
+        print("Login successful")
+        return session
+    else:
+        print("Login failed")
+        return None
 
-# Function to fetch data from a URL with retry logic
-def fetch_data(url, retries=3, delay=5):
-    for attempt in range(retries):
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            if response.status_code == 429:
-                logging.warning(f"Rate limit hit for URL {url}. Retrying after {delay} seconds...")
-                time.sleep(delay)
-                continue
-            return response.text
-        except requests.RequestException as e:
-            logging.error(f"Error fetching data from URL {url}: {e}")
-            time.sleep(delay)
-    raise Exception(f"Failed to fetch data from URL {url} after {retries} attempts.")
+def scrape_company_data(session, company_id):
+    search_url = f"https://www.screener.in/company/{company_id}/consolidated/"
+    search_response = session.get(search_url)
+    if search_response.status_code == 200:
+        print(f"{company_id} data retrieved successfully")
+        soup = BeautifulSoup(search_response.content, 'html.parser')
+        table1 = soup.find('section', {'id': 'profit-loss'})
+        table = table1.find('table')
+        headers = [th.text.strip() for th in table.find_all('th')]
+        rows = table.find_all('tr')
+        row_data = []
+        for row in rows[1:]:
+            cols = row.find_all('td')
+            cols = [col.text.strip() for col in cols]
+            if len(cols) == len(headers):
+                row_data.append(cols)
+            else:
+                print(f"Row data length mismatch: {cols}")
+        df = pd.DataFrame(row_data, columns=headers)
+        if not df.empty:
+            df.columns = ['Year'] + df.columns[1:].tolist()
+            df = df.rename(columns={'Narration': 'Year', 'Year': 'year'})
+        df_transposed = df.transpose().reset_index()
+        df_transposed.rename(columns={'index': 'Narration'}, inplace=True)
+        df_transposed = df_transposed.reset_index(drop=True)
+        df_transposed.columns = [col.strip() for col in df_transposed.iloc[0]]  
+        df_transposed = df_transposed[1:]  
+        df_transposed = df_transposed.reset_index(drop=True)
+        df_transposed.columns = [col if col else 'Unknown' for col in df_transposed.columns]  
+        df_transposed = df_transposed.replace('', 0)  
+        df_transposed = df_transposed.replace(np.nan, 0)  
+        # Added data cleaning step
+        cleaned_columns = []
+        for col in df_transposed.columns:
+            cleaned_col = col.replace(' ', '_').replace('+', '').strip()
+            cleaned_columns.append(cleaned_col)
+        df_transposed.columns = cleaned_columns
 
-# Function to process and save data to the database
-def process_and_save_data(symbol, company_name, engine):
-    url = f'https://screener.in/company/{symbol}/consolidated/'
-    html_content = fetch_data(url)
+        for col in df_transposed.columns[1:]:
+            df_transposed[col] = df_transposed[col].apply(clean_data)
+        
+        print(df_transposed.columns)  # Print the column names
+        df_transposed = df_transposed[df_transposed['year'] != 'TTM']  # Drop the TTM row
+        df_transposed['company_name'] = company_id
+        print(df_transposed.head())
+        return df_transposed
+    else:
+        print(f"Failed to retrieve {company_id} data")
+        return None
 
+def clean_data(value):
+    if isinstance(value, str):
+        value = value.replace("+", "").replace("%", "").replace(",", "").replace(" ", "").strip()
+        if value.replace('.', '', 1).isdigit():
+            try:
+                return float(value)
+            except ValueError:
+                return 0.0  
+        return value.replace(',', '')  
+    return value
+
+def save_to_postgres(df, table_name, db, user, password, host, port):
+    engine = create_engine(f"postgresql://{user}:{password}@{host}:{port}/{db}")
     try:
-        soup = bs(html_content, 'html.parser')
-        profit_loss_section = soup.find('section', id="profit-loss")
-        if not profit_loss_section:
-            logging.warning(f"Failed to find the profit-loss section for symbol {symbol} at URL {url}.")
-            return
-
-        table = profit_loss_section.find("table")
-        if not table:
-            logging.warning(f"Failed to find the table in the profit-loss section for symbol {symbol} at URL {url}.")
-            return
-
-        table_data = []
-        for row in table.find_all('tr'):
-            row_data = [cell.text.strip() for cell in row.find_all(['th', 'td'])]
-            table_data.append(row_data)
-
-        df_table = pd.DataFrame(table_data)
-        if df_table.empty:
-            logging.warning(f"No data found for symbol {symbol}.")
-            return
-
-        df_table.columns = df_table.iloc[0]
-        df_table = df_table[1:]
-        df_table.reset_index(drop=True, inplace=True)
-        df_table.insert(0, 'id', range(1, len(df_table) + 1))
-        df_table.insert(1, 'Narration', df_table.iloc[:, 1])
-        df_table = df_table.drop(df_table.columns[2], axis=1)
-        df_table.insert(2, 'company_name', company_name)
-
-        columns = ['id'] + [col for col in df_table.columns if col != 'id']
-        df_table = df_table[columns]
-
-        df_table = df_table.drop(df_table.columns[0], axis=1)
-        df_melted = pd.melt(df_table, id_vars=['Narration', 'company_name'], var_name='Year', value_name='Value')
-        df_melted = df_melted.sort_values(by=['Narration', 'Year']).reset_index(drop=True)
-
-        financials_table = Table('financials', MetaData(),
-            Column('id', Integer, primary_key=True),
-            Column('Narration', String),
-            Column('company_name', String),
-            Column('Year', String),
-            Column('Value', String)
-        )
-
-        financials_table.create(engine, checkfirst=True)
-
-        df_melted.to_sql('financials', con=engine, if_exists='append', index=False)
-
-        logging.info("Data loaded successfully into PostgreSQL database!")
-
-    except Exception as e:
-        logging.error(f"An error occurred for symbol {symbol} at URL {url}: {e}")
+        for col in df.columns[1:]:
+            df[col] = df[col].apply(clean_data)
+        df = df.fillna(0)
+        df.to_sql(table_name, con=engine, if_exists='replace', index=False)
+        print("Data saved to Postgres")
+    except SQLAlchemyError as e:
+        print(f"Error: {e}")
+    finally:
+        engine.dispose()
 
 def main():
-    try:
-        df_symbols = pd.read_csv('company.csv')
-        logging.info("Column names in CSV file: %s", df_symbols.columns)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--email", default="darshan.patil@godigitaltc.com")
+    parser.add_argument("--password", default="Darshan123")
+    parser.add_argument("--table_name", default="company_data")
+    parser.add_argument("--db", default="MyTask")
+    parser.add_argument("--user", default="Darshan")
+    parser.add_argument("--pw", default="Darshan123")
+    parser.add_argument("--host", default="192.168.1.223")
+    parser.add_argument("--port", default="5432")
 
-        if 'Symbol' in df_symbols.columns and 'Company Name' in df_symbols.columns:
-            symbols = df_symbols['Symbol'].tolist()
-            company_names = df_symbols['Company Name'].tolist()
-        else:
-            logging.error("Error: The 'Symbol' or 'Company Name' columns do not exist in the CSV file.")
-            return
-
-        # PostgreSQL connection
-        db_user = os.environ['Darshan']
-        db_password = os.environ['Darshan123']
-        db_host = os.environ['192.168.1.223']
-        db_name = os.environ['MyTask1']
-        engine = create_engine(f'postgresql://{db_user}:{db_password}@{db_host}/{db_name}')
-
-        for symbol, company_name in zip(symbols, company_names):
-            process_and_save_data(symbol, company_name, engine)
-
-    except FileNotFoundError:
-        logging.error("Error: The file 'company.csv' does not exist.")
-    except Exception as e:
-        logging.error("An error occurred: %s", e)
+    args = parser.parse_args()
+    session = login_to_screener(args.email, args.password)
+    if session:
+        company_ids = ["ASIANPAINT", "BAJAJ-AUTO", "CIPLA", "DIVISLAB", "GRASIM", "HDFCBANK", "INDUSINDBK", "JSWSTEEL", "M&M", "RELIANCE"]
+        # Randomly select 10 companies
+        company_ids = random.sample(company_ids, 10)
+        combined_df = pd.DataFrame()
+        for company_id in company_ids:
+            df = scrape_company_data(session, company_id)
+            if df is not None:
+                df['company_id'] = company_id
+                combined_df = pd.concat([combined_df, df])
+        save_to_postgres(combined_df, args.table_name, args.db, args.user, args.pw, args.host, args.port)
 
 if __name__ == "__main__":
     main()
