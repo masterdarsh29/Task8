@@ -1,0 +1,9 @@
+requests
+pandas
+beautifulsoup4
+psycopg2-binary
+pg8000 
+sqlalchemy
+argparse
+numpy
+columns
