@@ -1,9 +1,11 @@
 
+
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 import psycopg2
 from sqlalchemy import create_engine
+import sqlalchemy
 from sqlalchemy.exc import SQLAlchemyError
 import argparse
 import numpy as np
@@ -96,10 +98,13 @@ def clean_data(value):
 def save_to_postgres(df, table_name, db, user, password, host, port):
     engine = create_engine(f"postgresql://{user}:{password}@{host}:{port}/{db}")
     try:
-        for col in df.columns[1:]:
-            df[col] = df[col].apply(clean_data)
-        df = df.fillna(0)
-        df.to_sql(table_name, con=engine, if_exists='replace', index=False)
+        for col in df.columns:
+            if col not in ['year', 'company_name']:
+                df[col] = df[col].astype(float)
+        df.to_sql(table_name, con=engine, if_exists='replace', index=False, dtype={
+            'year': sqlalchemy.types.Text,
+            'company_name': sqlalchemy.types.Text
+        })
         print("Data saved to Postgres")
     except SQLAlchemyError as e:
         print(f"Error: {e}")
