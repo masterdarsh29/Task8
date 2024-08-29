@@ -1,3 +1,4 @@
+
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -126,9 +127,8 @@ def main():
         for company_id in company_ids:
             df = scrape_comp_data(session, company_id)
             if df is not None:
-                df['company_id'] = company_id
+                df['company_name'] = company_id
+                # Drop company_id column
+                # df = df.drop('company_id', axis=1)
                 combined_df = pd.concat([combined_df, df])
         save_to_postgres(combined_df, args.table_name, args.db, args.user, args.pw, args.host, args.port)
-
-if __name__ == "__main__":
-    main()
