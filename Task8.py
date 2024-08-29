@@ -120,7 +120,7 @@ def main():
     args = parser.parse_args()
     session = login_to_screener(args.email, args.password)
     if session:
-        company_ids = ["ASIANPAINT", "BAJAJ-AUTO", "CIPLA", "DIVISLAB", "GRASIM", "HDFCBANK", "INDUSINDBK", "JSWSTEEL", "M&M", "RELIANCE"]
+        company_ids = [""BAJAJ-AUTO", "M&M", "TATAMOTORS", "MARUTI", "HEROMOTOCORP", "EICHERMOT", "TVSMOTOR", "ASHOKLEY", "MRF", "EXIDEIND"]
         # Randomly select 10 companies
         company_ids = random.sample(company_ids, 10)
         combined_df = pd.DataFrame()
