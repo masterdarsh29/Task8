@@ -118,7 +118,7 @@ def main():
     parser.add_argument("--db", default="MyTask")
     parser.add_argument("--user", default="Darshan")
     parser.add_argument("--pw", default="Darshan123")
-    parser.add_argument("--host", default="192.168.1.223")
+    parser.add_argument("--host", default="192.168.3.45")
     parser.add_argument("--port", default="5432")
 
     args = parser.parse_args()
