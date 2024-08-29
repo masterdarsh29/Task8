@@ -1,5 +1,4 @@
 
-
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -34,7 +33,7 @@ def login_to_screener(email, password):
         print("Login failed")
         return None
 
-def scrape_companys_data(session, company_id):
+def scrape_company_data(session, company_id):
     search_url = f"https://www.screener.in/company/{company_id}/consolidated/"
     search_response = session.get(search_url)
     if search_response.status_code == 200:
@@ -115,7 +114,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--email", default="darshan.patil@godigitaltc.com")
     parser.add_argument("--password", default="Darshan123")
-    parser.add_argument("--table_name", default="companys_data")
+    parser.add_argument("--table_name", default="com_data")
     parser.add_argument("--db", default="MyTask")
     parser.add_argument("--user", default="Darshan")
     parser.add_argument("--pw", default="Darshan123")
@@ -130,7 +129,7 @@ def main():
         company_ids = random.sample(company_ids, 10)
         combined_df = pd.DataFrame()
         for company_id in company_ids:
-            df = scrape_companys_data(session, company_id)
+            df = scrape_company_data(session, company_id)
             if df is not None:
                 df['company_name'] = company_id
                 # Drop company_id column
