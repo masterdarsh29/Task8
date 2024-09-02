@@ -30,6 +30,37 @@ def login_to_screener(email, password):
         print("Login failed")
         return None
 
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+import argparse
+import numpy as np
+
+def login_to_screener(email, password):
+    session = requests.Session()
+    login_url = "https://www.screener.in/login/?"
+    login_page = session.get(login_url)
+    soup = BeautifulSoup(login_page.content, 'html.parser')
+    csrf_token = soup.find('input', {'name': 'csrfmiddlewaretoken'})['value']
+    login_payload = {
+        'username': email,
+        'password': password,
+        'csrfmiddlewaretoken': csrf_token
+    }
+    headers = {
+        'Referer': login_url,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36'
+    }
+    response = session.post(login_url, data=login_payload, headers=headers)
+    if response.url == "https://www.screener.in/dash/":
+        print("Login successful")
+        return session
+    else:
+        print("Login failed")
+        return None
 def scrape_telecom_data(session, company_id):
     search_url = f"https://www.screener.in/company/{company_id}/consolidated/"
     search_response = session.get(search_url)
@@ -50,8 +81,9 @@ def scrape_telecom_data(session, company_id):
                 print(f"Row data length mismatch: {cols}")
         df = pd.DataFrame(row_data, columns=headers)
         if not df.empty:
-            df.columns = ['Year'] + df.columns[1:].tolist()
-            df = df.rename(columns={'Narration': 'Year', 'Year': 'year'})
+            df.columns = ['year'] + df.columns[1:].tolist()
+            df = df.rename(columns={'Narration': 'year'})
+        df = df[~df['year'].str.contains('TTL')]
         df_transposed = df.transpose().reset_index()
         df_transposed.rename(columns={'index': 'Narration'}, inplace=True)
         df_transposed = df_transposed.reset_index(drop=True)
@@ -66,11 +98,10 @@ def scrape_telecom_data(session, company_id):
             cleaned_col = col.replace(' ', '_').replace('+', '').strip()
             cleaned_columns.append(cleaned_col)
         df_transposed.columns = cleaned_columns
-
         for col in df_transposed.columns[1:]:
             df_transposed[col] = df_transposed[col].apply(clean_data)
-        
         df_transposed['company_id'] = company_id
+        df_transposed = df_transposed[df_transposed['year'] != 'TTM']
         return df_transposed
     else:
         print(f"Failed to retrieve {company_id} data")
@@ -100,11 +131,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--email", default="darshan.patil@godigitaltc.com")
     parser.add_argument("--password", default="Darshan123")
-    parser.add_argument("--table_name", default="tel_profit_loss_data")
+    parser.add_argument("--table_name", default="tele_profit_loss_data")
     parser.add_argument("--db", default="MyTask")
     parser.add_argument("--user", default="Darshan")
     parser.add_argument("--pw", default="Darshan123")
-    parser.add_argument("--host", default="192.168.3.45")
+    parser.add_argument("--host", default="192.168.1.223")
     parser.add_argument("--port", default="5432")
     args = parser.parse_args()
     session = login_to_screener(args.email, args.password)
